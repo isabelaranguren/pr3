@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "*.embeddedhtml": "html",
+        "*.html": "html",
+        "fstream": "c",
+        "signal.h": "c",
+        "types.h": "c",
+        "stdlib.h": "c",
+        "in.h": "c",
+        "socket.h": "c"
+    }
+}

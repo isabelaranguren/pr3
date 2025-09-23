@@ -1,0 +1,26 @@
+
+{
+  "name": "CS6200 GIOS Development Environment",
+  "image": "gtomscs6200/fall25-environment:latest",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {}
+  },
+
+  // VS Code settings
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.shell.linux": "/bin/bash",
+        "C_Cpp.default.cStandard": "gnu17",
+        "C_Cpp.default.cppStandard": "gnu++17",
+        "C_Cpp.default.intelliSenseMode": "gcc-x64"
+      },
+      "extensions": [
+        "ms-vscode.cpptools-extension-pack",
+        "ms-python.python",
+        "ms-vscode.makefile-tools"
+      ]
+    }
+  }
+}
