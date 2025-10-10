@@ -1,74 +1,81 @@
 #include "proxy-student.h"
 #include "gfserver.h"
 
-
-
 #define MAX_REQUEST_N 512
 #define BUFSIZE (6426)
 
 typedef struct  {
-	gfcontext_t *ctx;
-	size_t total_bytes;
-} Stream;
- 
-static size_t write_cb( void *data, size_t size, size_t n, void *ptr)
+    char *res;
+    size_t size;
+} memory;
+
+
+/* Call back function adapted from lib curl docs
+https://curl.se/libcurl/c/CURLOPT_WRITEFUNCTION.html */
+static size_t write_callback(void *data, size_t size, size_t nmemb, void *clientp)
 {
-	Stream *s = (Stream *)ptr;
-	size_t bytes = size * n;
-	size_t sent = gfs_send(s->ctx, data, bytes);
+    size_t realsize = nmemb * size;
+    memory *mem = (memory *)clientp;
 
-	if (sent != (ssize_t)bytes) {
-        fprintf(stderr, "gfs_send failed\n");
-        return 0;
-    }
+    char *ptr = realloc(mem->res, mem->size + realsize + 1);
+    if(!ptr) return 0;  // out of memory
 
-	s->total_bytes += sent;
-	return bytes;
+    mem->res = ptr;
+    memcpy(&(mem->res[mem->size]), data, realsize);
+    mem->size += realsize;
+
+    return realsize;
 }
 
+ssize_t handle_with_curl(gfcontext_t *ctx, const char *path, void *arg)
+{
+    CURL *curl = curl_easy_init();
+    if (!curl) return SERVER_FAILURE;
 
-ssize_t handle_with_curl(gfcontext_t *ctx, const char *path, void* arg){
-	//Your implementation here
+    char url[BUFSIZE];
+    snprintf(url, sizeof(url), "%s%s", (char *)arg, path);
 
-	CURL *curl_handle;
-	CURLcode ret;
+    CURLcode ret;
+    memory chunk = {0};
 
-
-	curl_handle = curl_easy_init();
-	if (!curl_handle) return -1;
-
-
-	char url[BUFSIZE];
-	snprintf(url, sizeof(url), "%s%s", (char *)arg, path);	
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &chunk);
 
 
-	Stream s;
-	s.ctx = ctx;
-	s.total_bytes = 0;
+    // fprintf(stderr, "URL: %s\n", url);
 
-	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, write_cb);
-	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, &s);
-	curl_easy_setopt(curl_handle, CURLOPT_URL, url);
-	curl_easy_setopt(curl_handle, CURLOPT_FOLLOWLOCATION, 1L);
-	curl_easy_setopt(curl_handle, CURLOPT_FAILONERROR, 1L);
+    ret = curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
 
-	
-	ret = curl_easy_perform(curl_handle);
-
-	if (ret != CURLE_OK) {
+    if (ret != CURLE_OK) {
+        free(chunk.res);
         return gfs_sendheader(ctx, GF_FILE_NOT_FOUND, 0);
     }
 
-	curl_easy_cleanup(curl_handle);
-	gfs_sendheader(ctx, GF_OK, s.total_bytes);
+    // Send header with actual size
+    // fprintf(stderr, "downloaded size: %zu bytes\n", chunk.size);
+    gfs_sendheader(ctx, GF_OK, chunk.size);
 
-	return s.total_bytes;
+    // Stream data to client
+    size_t total_sent = 0;
+    while (total_sent < chunk.size) {
+        ssize_t sent = gfs_send(ctx, chunk.res + total_sent, chunk.size - total_sent);
+        if (sent <= 0) {
+            // fprintf(stderr, "gfs_send failed after %zu bytes sent\n", total_sent);
+            free(chunk.res);
+            return SERVER_FAILURE;
+        }
+        total_sent += sent;
+        // fprintf(stderr, "Sent %zu/%zu bytes...\n", total_sent, chunk.size);
+    }
 
+    free(chunk.res);
+    return total_sent;
 }
 
-/*
- * We provide a dummy version of handle_with_file that invokes handle_with_curl as a convenience for linking!
- */
-ssize_t handle_with_file(gfcontext_t *ctx, const char *path, void* arg){
-	return handle_with_curl(ctx, path, arg);
-}	
+ssize_t handle_with_file(gfcontext_t *ctx, const char *path, void* arg) {
+    return handle_with_curl(ctx, path, arg);
+}
