@@ -12,6 +12,7 @@
 
 #include "cache-student.h"
 #include "gfserver.h"
+#include "shm_channel.h"
 
 // Note that the -n and -z parameters are NOT used for Part 1 
                         
@@ -43,6 +44,8 @@ static struct option gLongOptions[] = {
 
 //gfs
 static gfserver_t gfs;
+static shm_data_t *shm_segment;  // single segment
+
 //handles cache
 extern ssize_t handle_with_cache(gfcontext_t *ctx, char *path, void* arg);
 
@@ -135,12 +138,15 @@ int main(int argc, char **argv) {
     exit(__LINE__);
   }
 
+  /* Initialize shared memory set-up here */
+  shm_segment = create_shm_segment(segsize);
+  if (!shm_segment) {
+    fprintf(stderr, "Failed to initialize shared memory segment\n");
+    exit(1);
+  }
 
-
-  /* Initialize shared memory set-up here
 
   // Initialize server structure here
-  */
   gfserver_init(&gfs, nworkerthreads);
 
   // Set server options here

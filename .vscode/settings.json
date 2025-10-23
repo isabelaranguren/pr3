@@ -7,6 +7,9 @@
         "types.h": "c",
         "stdlib.h": "c",
         "in.h": "c",
-        "socket.h": "c"
+        "socket.h": "c",
+        "simplecache.h": "c",
+        "pthread.h": "c",
+        "cache-student.h": "c"
     }
 }

@@ -1,0 +1,11 @@
+#Elapsed Time (secs),Bytes Received,Requests Serviced, Requests Failed, Comment
+   0.00092,          0,          0,          1, /master/1kb-sample-file-1.html
+   0.00130,          0,          0,          2, /master/1kb-sample-file-2.png
+   0.00183,          0,          0,          3, /master/1kb-sample-file-3.jpg
+   0.00214,          0,          0,          4, /master/1kb-sample-file-4.png
+   0.00248,          0,          0,          5, /master/paraglider.jpg
+   0.00276,          0,          0,          6, /master/road.jpg
+   0.00335,          0,          0,          7, /master/yellowstone.jpg
+   0.00381,          0,          0,          8, /master/moranabovejacksonlake.jpg
+   0.00448,          0,          0,          9, /master/1kb-sample-file-0.png
+   0.00550,          0,          0,         10, /master/1kb-sample-file-1.html
