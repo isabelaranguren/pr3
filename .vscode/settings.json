@@ -10,6 +10,10 @@
         "socket.h": "c",
         "simplecache.h": "c",
         "pthread.h": "c",
-        "cache-student.h": "c"
+        "cache-student.h": "c",
+        "mqueue.h": "c",
+        "errno.h": "c",
+        "shm_channel.h": "c",
+        "stdio.h": "c"
     }
 }

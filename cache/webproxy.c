@@ -136,12 +136,10 @@ int main(int argc, char **argv) {
     exit(__LINE__);
   }
 
-
-
-  /* Initialize shared memory set-up here
+  /* Initialize shared memory set-up here */
+  create_shm_pool(nsegments, segsize);
 
   // Initialize server structure here
-  */
   gfserver_init(&gfs, nworkerthreads);
 
   // Set server options here
@@ -150,6 +148,7 @@ int main(int argc, char **argv) {
   gfserver_setopt(&gfs, GFS_MAXNPENDING, 187);
 
   // Set up arguments for worker here
+
   for(int i = 0; i < nworkerthreads; i++) {
     gfserver_setopt(&gfs, GFS_WORKER_ARG, i, "data");
   }

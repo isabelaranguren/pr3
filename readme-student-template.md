@@ -11,3 +11,21 @@ For this is one I used detailed logging to keep track of the number of bytes tha
 
 I also ran tests using gfmetrics and all requests completed successfully.
 
+Responsibility Area
+Proxy (Owner/Initializer)
+Cache (Responder)
+Data Channel (Shared Memory)
+- Creates shared memory segment(s)  - Pre-creates synchronization objects (mutex + semaphores)  - Determines segment size & number  - Cleans up/unlinks segments after use
+- Opens proxy-created shared memory segment  - Writes file chunks into the segment  - Uses mutex + semaphores to synchronize writes
+Command Channel (IPC)
+- Sends requests to cache with file path & segment name
+- Listens on command channel  - Receives requests and retrieves file from cache  - Provides file chunks back via data channel
+Synchronization
+- Owns initialization of mutex and semaphores  - Uses semaphores to wait for cache signals (chunk ready/consumed)
+- Locks/unlocks mutex for atomic updates  - Posts semaphores to signal proxy when chunk is ready/consumed
+Error Handling / Robustness
+- Retries if cache not running yet  - Cleans up shared memory even if cache dies
+- Retries if shared memory segment not ready  - Does not crash if proxy is not yet running
+Lifecycle Management
+- Responsible for creating, using, and destroying shared memory segments
+- Only accesses the segments for the duration of the request; does not create or destroy them

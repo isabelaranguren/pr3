@@ -1,73 +1,93 @@
 #include "gfserver.h"
 #include "cache-student.h"
 #include "shm_channel.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <mqueue.h>
+#include <errno.h>
+#include <unistd.h>
 
-#define BUFSIZE (840)
+#define CACHE_COMMAND_QUEUE "/cache_command_q"
+#define BUFSIZE 8192
 
-extern shm_data_t *shm_segment;
-extern size_t shm_segsize;  
+typedef struct {
+    char path[MAX_REQUEST_LEN];
+    char shm_name[MAX_SHM_NAME];
+    size_t segsize;
+} cache_req_t;
 
-ssize_t handle_with_cache(gfcontext_t *ctx, char *path, void* arg) {
-    shm_data_t *shm = shm_segment;  // use global segment
-    size_t file_len;
-    size_t bytes_transferred = 0;
-    ssize_t read_len, write_len;
-    int fd;
-    struct stat statbuf;
+// TODO: fIX THIS
+ssize_t handle_with_cache(gfcontext_t *ctx, char *path, void *arg) {
+    shm_data_t *shm = NULL;
+    cache_req_t request;
+    mqd_t mq;
+    ssize_t total_bytes_sent = 0;
+    int finished = 0;
 
-    // Open the requested file
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        if (errno == ENOENT) return gfs_sendheader(ctx, GF_FILE_NOT_FOUND, 0);
-        else return SERVER_FAILURE;
-    }
+    // Get an available shared memory segment 
+    pthread_mutex_lock(&shm_queue_mutex);
+    while (steque_isempty(&shm_queue))
+        pthread_cond_wait(&shm_queue_cond, &shm_queue_mutex);
 
-    if (fstat(fd, &statbuf) < 0) {
-        close(fd);
+    shm = steque_pop(&shm_queue);
+    pthread_mutex_unlock(&shm_queue_mutex);
+
+    if (!shm) {
+        fprintf(stderr, "[Proxy] No shared memory segment available\n");
         return SERVER_FAILURE;
     }
 
-    file_len = (size_t) statbuf.st_size;
-    gfs_sendheader(ctx, GF_OK, file_len);
+    /* Step 2: Send request to cache via command channel (message queue) */
+    strncpy(request.path, path, sizeof(request.path) - 1);
+    strncpy(request.shm_name, shm->name, sizeof(request.shm_name) - 1);
+    request.segsize = shm->segsize;
 
-    char buffer[BUFSIZE];
-
-    while (bytes_transferred < file_len) {
-        // Read chunk from file
-        read_len = read(fd, buffer, BUFSIZE);
-        if (read_len <= 0) break;
-
-        size_t offset = 0;
-        while (offset < read_len) {
-            // Wait for proxy to read previous data
-            sem_wait(&shm->proxy_read);
-
-            // Determine how much fits in shared memory
-            size_t chunk_size = read_len - offset;
-            if (chunk_size > shm_segsize) chunk_size = shm_segsize;
-
-            // Copy to shared memory
-            memcpy(shm->data, buffer + offset, chunk_size);
-            shm->size = chunk_size;
-
-            // Signal cache written
-            sem_post(&shm->cache_written);
-
-            offset += chunk_size;
-        }
-
-        // Now read back from shared memory into proxy and send to client
-        sem_wait(&shm->cache_written); // Wait until cache wrote
-        write_len = gfs_send(ctx, shm->data, shm->size);
-        if (write_len != shm->size) {
-            close(fd);
-            return SERVER_FAILURE;
-        }
-        sem_post(&shm->proxy_read); // Allow next chunk to be written
-
-        bytes_transferred += read_len;
+    mq = mq_open(CACHE_COMMAND_QUEUE, O_WRONLY);
+    if (mq == (mqd_t)-1) {
+        perror("[Proxy] mq_open");
+        return SERVER_FAILURE;
     }
 
-    close(fd);
-    return bytes_transferred;
+    if (mq_send(mq, (char *)&request, sizeof(request), 0) == -1) {
+        perror("[Proxy] mq_send");
+        mq_close(mq);
+        return SERVER_FAILURE;
+    }
+    mq_close(mq);
+
+    /* Step 3: Wait for cache to start writing */
+    gfs_sendheader(ctx, GF_OK, 0);  // you could send file size if cache gives it later
+
+    /* Step 4: Read chunks from shared memory and stream to client */
+    while (!finished) {
+        // Wait for cache to write data
+        sem_wait(&shm->wsem);
+
+        if (shm->size == 0) {
+            finished = 1;
+            sem_post(&shm->rsem);
+            break;
+        }
+
+        ssize_t sent = gfs_send(ctx, shm->data, shm->size);
+        if (sent < 0) {
+            perror("[Proxy] gfs_send");
+            sem_post(&shm->rsem);
+            break;
+        }
+
+        total_bytes_sent += sent;
+
+        // Allow cache to write next chunk
+        sem_post(&shm->rsem);
+    }
+
+    /* Step 5: Return segment to pool */
+    pthread_mutex_lock(&shm_queue_mutex);
+    steque_enqueue(&shm_queue, shm);
+    pthread_cond_signal(&shm_queue_cond);
+    pthread_mutex_unlock(&shm_queue_mutex);
+
+    return total_bytes_sent;
 }
