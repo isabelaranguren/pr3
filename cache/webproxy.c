@@ -47,10 +47,10 @@ static gfserver_t gfs;
 //handles cache
 extern ssize_t handle_with_cache(gfcontext_t *ctx, char *path, void* arg);
 
-static void _sig_handler(int signo){
-  if (signo == SIGTERM || signo == SIGINT){
-    //cleanup could go here
+static void _sig_handler(int signo) {
+  if (signo == SIGINT || signo == SIGTERM) {
     gfserver_stop(&gfs);
+    cleanup_shm_pool();
     exit(signo);
   }
 }
@@ -138,7 +138,6 @@ int main(int argc, char **argv) {
 
   /* Initialize shared memory set-up here */
   create_shm_pool(nsegments, segsize);
-
   // Initialize server structure here
   gfserver_init(&gfs, nworkerthreads);
 
@@ -150,7 +149,7 @@ int main(int argc, char **argv) {
   // Set up arguments for worker here
 
   for(int i = 0; i < nworkerthreads; i++) {
-    gfserver_setopt(&gfs, GFS_WORKER_ARG, i, "data");
+    gfserver_setopt(&gfs, GFS_WORKER_ARG, i, server);
   }
   
   // Invokethe framework - this is an infinite loop and will not return

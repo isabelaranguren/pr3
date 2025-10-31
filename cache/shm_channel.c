@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <steque.h>
+#include "steque.h"
 
 steque_t shm_queue;
 pthread_mutex_t shm_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -43,4 +43,27 @@ void create_shm_pool(int nsegments, int segsize) {
         pthread_mutex_unlock(&shm_queue_mutex);
     }
     printf("[Proxy] Created %d shared memory segments\n", nsegments);
+}
+
+void cleanup_shm_pool(void) {
+    pthread_mutex_lock(&shm_queue_mutex);
+    while (!steque_isempty(&shm_queue)) {
+        shm_data_t *shm = (shm_data_t *)steque_pop(&shm_queue);
+
+        // Copy the name before unmapping
+        char name_copy[128];
+        strncpy(name_copy, shm->name, sizeof(name_copy)-1);
+        name_copy[sizeof(name_copy)-1] = '\0';
+
+        sem_destroy(&shm->rsem);
+        sem_destroy(&shm->wsem);
+
+        if (shm_unlink(name_copy) < 0) {
+            perror("shm_unlink");
+        }
+
+        munmap(shm, sizeof(shm_data_t) + shm->segsize);
+    }
+    pthread_mutex_unlock(&shm_queue_mutex);
+    steque_destroy(&shm_queue);
 }

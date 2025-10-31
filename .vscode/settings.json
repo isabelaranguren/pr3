@@ -14,6 +14,10 @@
         "mqueue.h": "c",
         "errno.h": "c",
         "shm_channel.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "steque.h": "c",
+        "semaphore.h": "c",
+        "curl.h": "c",
+        "string.h": "c"
     }
 }
