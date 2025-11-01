@@ -12,8 +12,6 @@
 #include <signal.h> 
 #define MAX_CHUNK 8192
 
-
-
 typedef struct {
     char name[100]; //segment name on shm_open
     char file_path[1024]; // request file path
@@ -26,5 +24,7 @@ typedef struct {
     char data[];  // being tansferred  
 } shm_data_t;
 
+shm_data_t* get_shm_segment(void);
+void return_segment_to_pool(shm_data_t *shm);
 void create_shm_pool(int nsegments, int segsize);
 void cleanup_shm_pool(void);

@@ -18,6 +18,7 @@
         "steque.h": "c",
         "semaphore.h": "c",
         "curl.h": "c",
-        "string.h": "c"
+        "string.h": "c",
+        "gfserver.h": "c"
     }
 }
