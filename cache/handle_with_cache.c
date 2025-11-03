@@ -75,7 +75,7 @@ ssize_t handle_with_cache(gfcontext_t *ctx, const char *path, void *arg) {
     // Receive and send data chunks
     int chunk_count = 0;
     
-    while (1) {
+    while (total_bytes_sent < file_size) {
         sem_wait(&shm->wsem); // wait until cache writes chunk
         
         if (shm->bytes_written == 0) { // EOF
@@ -86,6 +86,10 @@ ssize_t handle_with_cache(gfcontext_t *ctx, const char *path, void *arg) {
         
         // Send chunk to client
         ssize_t sent = gfs_send(ctx, shm->data, shm->bytes_written);
+
+        printf("[Proxy] Thread %ld: gfs_send returned %ld (expected %ld)\n",
+        pthread_self(), sent, shm->bytes_written);
+
         if (sent < 0) {
             perror("[Proxy] gfs_send");
             // CRITICAL FIX: Drain remaining data from cache before breaking
@@ -115,6 +119,7 @@ ssize_t handle_with_cache(gfcontext_t *ctx, const char *path, void *arg) {
     
     return_segment_to_pool(shm);
     printf("[Proxy] Thread %ld returned segment %s to pool\n", pthread_self(), shm->name);
+    printf("[Proxy] Thread %ld RETURNING total_bytes_sent=%ld\n", pthread_self(), total_bytes_sent);
     
     return total_bytes_sent;
 }

@@ -72,7 +72,6 @@ void *cacheWorker(void *arg) {
         printf("[Cache TID:%lu] Received request for file: %s, shm segment: %s\n",
                (unsigned long)tid, request.path, request.shm_name);
 
-        // Open shared memory segment
         int shmfd = shm_open(request.shm_name, O_RDWR, 0);
         if (shmfd < 0) {
             perror("[Cache] shm_open");
@@ -94,62 +93,63 @@ void *cacheWorker(void *arg) {
             printf("[Cache] File not found: %s\n", request.path);
             shm->status = 404;
             shm->size = 0;
-            sem_post(&shm->wsem);
+            sem_post(&shm->wsem);  // Signal status ready
+            sem_wait(&shm->rsem);  // Wait for proxy acknowledgment
             munmap(shm, shm_total_size);
             close(shmfd);
             continue;
         }
+
         // Get file size
         struct stat st;
         if (fstat(fd, &st) == -1) {
             perror("[Cache] fstat");
             shm->status = 500;
             sem_post(&shm->wsem);
+            sem_wait(&shm->rsem);
             munmap(shm, shm_total_size);
             close(shmfd);
+            close(fd);
             continue;
         }
-                
+        
         size_t file_size = st.st_size;
         printf("[Cache TID:%lu] Serving file: %s (%zu bytes)\n", 
                (unsigned long)tid, request.path, file_size);
         
-        // Send status and file size first
+        // Set status and file size
         shm->status = 200;
-        shm->size = file_size;  // Total file size
-        shm->bytes_written = 0; // No data yet
-        sem_post(&shm->wsem);   // Signal proxy to read status
-        
-        // Wait for proxy to be ready
-        sem_wait(&shm->rsem);
+        shm->size = file_size;
+        sem_post(&shm->wsem);  // Signal header ready
+        sem_wait(&shm->rsem);  // Wait for proxy to read header
 
-        // Now send file data in chunks
-        size_t bytes_sent = 0;
-        while (bytes_sent < file_size) {
-            size_t bytes_left = file_size - bytes_sent;
+        // Now transfer file in chunks
+        size_t offset = 0;
+        while (offset < file_size) {
+            size_t bytes_left = file_size - offset;
             size_t chunk_size = (bytes_left < request.segsize) ? bytes_left : request.segsize;
 
-            ssize_t n = pread(fd, shm->data, chunk_size, bytes_sent);
+            ssize_t n = pread(fd, shm->data, chunk_size, offset);
             if (n <= 0) {
                 perror("[Cache] pread");
-                shm->bytes_written = 0;
-                sem_post(&shm->wsem);
                 break;
             }
 
             shm->bytes_written = n;
-            bytes_sent += n;
+            offset += n;
 
-            printf("[Cache TID:%lu] Wrote chunk: %zd bytes (total: %zu/%zu)\n",
-                   (unsigned long)tid, n, bytes_sent, file_size);
+            printf("[Cache TID:%lu] Wrote chunk: %zd bytes (offset: %zu/%zu)\n",
+                   (unsigned long)tid, n, offset, file_size);
 
-            sem_post(&shm->wsem);  // signal proxy
-            sem_wait(&shm->rsem);  // wait for proxy to read
+            sem_post(&shm->wsem);  // Signal chunk ready
+            sem_wait(&shm->rsem);  // Wait for proxy to consume chunk
         }
 
-        // Signal EOF
-        shm->bytes_written = 0;
+        // Signal completion
+        shm->bytes_written = 0;  // EOF marker
         sem_post(&shm->wsem);
+        sem_wait(&shm->rsem);
+
         printf("[Cache TID:%lu] Finished file: %s\n", (unsigned long)tid, request.path);
 
         munmap(shm, shm_total_size);

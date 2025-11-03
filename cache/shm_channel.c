@@ -69,6 +69,8 @@ shm_data_t* get_shm_segment(void) {
     pthread_mutex_unlock(&shm_queue_mutex);
 
     // Reset semaphores for reuse
+    sem_destroy(&shm->rsem);
+    sem_destroy(&shm->wsem);
     sem_init(&shm->rsem, 1, 1);
     sem_init(&shm->wsem, 1, 0);
     shm->size = 0;
@@ -81,7 +83,7 @@ shm_data_t* get_shm_segment(void) {
 void return_segment_to_pool(shm_data_t *shm) {
     shm->size = 0;
     shm->status = 0;
-
+    shm->bytes_written = 0;  
     pthread_mutex_lock(&shm_queue_mutex);
     steque_enqueue(&shm_queue, shm);
     pthread_cond_broadcast(&shm_queue_cond);
