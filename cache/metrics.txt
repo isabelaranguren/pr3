@@ -1,13 +1,8 @@
 #Elapsed Time (secs),Bytes Received,Requests Serviced, Requests Failed, Comment
-   0.00128,          0,          0,          1, /courses/ud923/filecorpus/1kb-sample-file-1.html
-   0.00203,          0,          0,          2, /courses/ud923/filecorpus/1kb-sample-file-2.png
-   0.00266,          0,          0,          3, /courses/ud923/filecorpus/1kb-sample-file-3.jpg
-   0.00312,          0,          0,          4, /courses/ud923/filecorpus/1kb-sample-file-4.png
-   0.00481,       4079,          0,          4, (null)
-   0.00483,       6928,          0,          4, (null)
-   0.00504,       6928,          1,          4, /courses/ud923/filecorpus/paraglider.jpg
-   0.00663,       6928,          1,          5, /courses/ud923/filecorpus/road.jpg
-   0.00729,       6928,          1,          6, /courses/ud923/filecorpus/yellowstone.jpg
-   0.00919,       6928,          1,          7, /courses/ud923/filecorpus/moranabovejacksonlake.jpg
-   0.00977,       6928,          1,          8, /courses/ud923/filecorpus/1kb-sample-file-0.png
-   0.01021,       6928,          1,          9, /courses/ud923/filecorpus/1kb-sample-file-1.html
+   0.00107,          0,          0,          1, /courses/ud923/filecorpus/1kb-sample-file-1.html
+   0.00150,          0,          0,          2, /courses/ud923/filecorpus/1kb-sample-file-2.png
+   0.00192,          0,          0,          3, /courses/ud923/filecorpus/1kb-sample-file-3.jpg
+   0.00253,          0,          0,          4, /courses/ud923/filecorpus/1kb-sample-file-4.png
+   0.00304,       4096,          0,          4, (null)
+   0.00313,       6928,          0,          4, (null)
+   0.00330,       6928,          1,          4, /courses/ud923/filecorpus/paraglider.jpg

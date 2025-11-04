@@ -9,23 +9,29 @@
 #include "cache-student.h"
 
 ssize_t handle_with_cache(gfcontext_t *ctx, const char *path, void *arg) {
-    shm_data_t *shm = get_shm_segment();
-    cache_req_t request;
-    mqd_t mq;
-    ssize_t total_bytes_sent = 0;
+    shm_data_t *shm;
     
-    printf("[Proxy] Thread %ld requesting file: %s\n", pthread_self(), path);
+    // Get shared memory segment from pool
+    shm = get_shm_segment();
+    
+    /* 
     printf("[Proxy] Thread %ld acquired segment: %s\n", pthread_self(), shm->name);
+    printf("[Proxy] Thread %ld requesting file: %s\n", pthread_self(), path)*/
     
-    // Prepare request
-    strncpy(request.path, path, sizeof(request.path)-1);
-    request.path[sizeof(request.path)-1] = '\0';
-    strncpy(request.shm_name, shm->name, sizeof(request.shm_name)-1);
-    request.shm_name[sizeof(request.shm_name)-1] = '\0';
+    /*Prepare request*/ 
+    cache_req_t request;
+    strncpy(request.path, path, sizeof(request.path) - 1);
+    request.path[sizeof(request.path) - 1] = '\0';
+    strncpy(request.shm_name, shm->name, sizeof(request.shm_name) - 1);
+    request.shm_name[sizeof(request.shm_name) - 1] = '\0';
     request.segsize = shm->segsize;
     
-    // Send request to cache
-    mq = mq_open(CACHE_COMMAND_QUEUE, O_WRONLY);
+    // Initialize semaphores
+    sem_init(&shm->wsem, 1, 0);
+    sem_init(&shm->rsem, 1, 1);
+    
+    // Open message queue and send request
+    mqd_t mq = mq_open(CACHE_COMMAND_QUEUE, O_WRONLY);
     if (mq == (mqd_t)-1) {
         perror("[Proxy] mq_open");
         return_segment_to_pool(shm);
@@ -40,86 +46,59 @@ ssize_t handle_with_cache(gfcontext_t *ctx, const char *path, void *arg) {
     }
     mq_close(mq);
     
-    printf("[Proxy] Thread %ld sent request to cache: %s\n", pthread_self(), path);
+    // printf("[Proxy] Thread %ld waiting for cache\n", pthread_self());
     
-    // Wait for cache to set status and file size
+    // Wait for status and file metadata
     sem_wait(&shm->wsem);
     
-    // Check status and send appropriate header
+    // printf("[Proxy] Thread %ld received status: %d\n", pthread_self(), shm->status);
+    
+    // Check status
     if (shm->status == 404) {
-        printf("[Proxy] Thread %ld: file not found: %s\n", pthread_self(), path);
+        // printf("[Proxy] Thread %ld: file not found\n", pthread_self());
         gfs_sendheader(ctx, GF_FILE_NOT_FOUND, 0);
         sem_post(&shm->rsem);
         return_segment_to_pool(shm);
-        printf("[Proxy] Thread %ld returned segment %s to pool\n", pthread_self(), shm->name);
         return SERVER_FAILURE;
     }
     
     if (shm->status != 200) {
-        printf("[Proxy] Thread %ld: cache error: %d\n", pthread_self(), shm->status);
+        // printf("[Proxy] Thread %ld: error status %d\n", pthread_self(), shm->status);
         gfs_sendheader(ctx, GF_ERROR, 0);
         sem_post(&shm->rsem);
         return_segment_to_pool(shm);
-        printf("[Proxy] Thread %ld returned segment %s to pool\n", pthread_self(), shm->name);
         return SERVER_FAILURE;
     }
     
-    // Status is 200, send OK header with file size
-    size_t file_size = shm->size;
+    // Send OK header to client
+    size_t file_size = shm->file_size;
     gfs_sendheader(ctx, GF_OK, file_size);
-    printf("[Proxy] Thread %ld sent header: OK, size=%zu\n", pthread_self(), file_size);
+    // printf("[Proxy] Thread %ld sent header: OK, size=%zu\n", pthread_self(), file_size);
     
-    // Signal cache we're ready for first data chunk
-    sem_post(&shm->rsem);
+    sem_post(&shm->rsem);  // Signal cache to start sending data
     
-    // Receive and send data chunks
-    int chunk_count = 0;
+    // SIMPLE LOOP - Transfer data chunks
+    size_t bytes_transferred = 0;
+    size_t bytes_sent = 0;
     
-    while (total_bytes_sent < file_size) {
-        sem_wait(&shm->wsem); // wait until cache writes chunk
+    while (bytes_transferred < file_size) {
+        sem_wait(&shm->wsem);
         
-        if (shm->bytes_written == 0) { // EOF
-            printf("[Proxy] Thread %ld received EOF on segment %s\n", pthread_self(), shm->name);
-            sem_post(&shm->rsem);
+        bytes_sent = gfs_send(ctx, shm->data, shm->bytes_written);
+        if (bytes_sent <= 0) {
+            perror("[Proxy] Error sending data to client");
             break;
         }
         
-        // Send chunk to client
-        ssize_t sent = gfs_send(ctx, shm->data, shm->bytes_written);
-
-        printf("[Proxy] Thread %ld: gfs_send returned %ld (expected %ld)\n",
-        pthread_self(), sent, shm->bytes_written);
-
-        if (sent < 0) {
-            perror("[Proxy] gfs_send");
-            // CRITICAL FIX: Drain remaining data from cache before breaking
-            printf("[Proxy] Thread %ld: client disconnected, draining cache\n", pthread_self());
-            sem_post(&shm->rsem); // Tell cache to send next chunk
-            
-            // Keep draining until EOF
-            while (1) {
-                sem_wait(&shm->wsem);
-                if (shm->bytes_written == 0) { // EOF
-                    sem_post(&shm->rsem);
-                    break;
-                }
-                // Discard data, just signal cache to continue
-                sem_post(&shm->rsem);
-            }
-            break;
-        }
+        bytes_transferred += bytes_sent;
+        /* printf("[Proxy] Thread %ld: sent %zu bytes (total: %zu/%zu)\n",
+            pthread_self(), bytes_sent, bytes_transferred, file_size); */
         
-        total_bytes_sent += sent;
-        chunk_count++;
-        printf("[Proxy] Thread %ld sent chunk %d (%ld bytes) from segment %s\n",
-               pthread_self(), chunk_count, sent, shm->name);
-        
-        sem_post(&shm->rsem); // signal cache that proxy read chunk
+        sem_post(&shm->rsem);
     }
     
-    return_segment_to_pool(shm);
-    printf("[Proxy] Thread %ld returned segment %s to pool\n", pthread_self(), shm->name);
-    printf("[Proxy] Thread %ld RETURNING total_bytes_sent=%ld\n", pthread_self(), total_bytes_sent);
+    /* printf("[Proxy] Thread %ld completed: %zu bytes\n", pthread_self(), bytes_transferred); */
     
-    return total_bytes_sent;
+    return_segment_to_pool(shm);
+    return bytes_transferred;
 }

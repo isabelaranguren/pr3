@@ -20,42 +20,33 @@ void create_shm_pool(int nsegments, int segsize) {
         snprintf(name, sizeof(name), "/shm_%d_%d", getpid(), i);
         // Remove any previous shm with same name
         shm_unlink(name);
-        int fd = shm_open(name, O_CREAT | O_RDWR, 0666);
+        int fd = shm_open(name,  O_RDWR | O_CREAT , S_IRUSR | S_IWUSR);
         if (fd < 0) {
             perror("shm_open");
-            exit(1);
         }
 
         if (ftruncate(fd, sizeof(shm_data_t) + segsize) < 0) {
             perror("ftruncate");
-            exit(1);
         }
 
         shm_data_t *shm = mmap(NULL, sizeof(shm_data_t) + segsize,
                                PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (shm == MAP_FAILED) {
             perror("mmap");
-            exit(1);
         }
 
-        // Initialize shared memory structure
+        /*Initialize shared memory structure */
         strncpy(shm->name, name, sizeof(shm->name)-1);
         shm->name[sizeof(shm->name)-1] = '\0';
         shm->segsize = segsize;
-        shm->size = 0;
+        shm->file_size = 0;
         shm->status = 0;
 
-        // Initialize semaphores
-        sem_init(&shm->rsem, 1, 1); // proxy can read initially
-        sem_init(&shm->wsem, 1, 0); // cache blocked initially
-
-        // Add to segment pool queue
+        /* Add to segment pool queue */
         pthread_mutex_lock(&shm_queue_mutex);
         steque_enqueue(&shm_queue, shm);
         pthread_mutex_unlock(&shm_queue_mutex);
     }
-
-    printf("[Proxy] Created %d shared memory segments\n", nsegments);
 }
 
 
@@ -69,11 +60,7 @@ shm_data_t* get_shm_segment(void) {
     pthread_mutex_unlock(&shm_queue_mutex);
 
     // Reset semaphores for reuse
-    sem_destroy(&shm->rsem);
-    sem_destroy(&shm->wsem);
-    sem_init(&shm->rsem, 1, 1);
-    sem_init(&shm->wsem, 1, 0);
-    shm->size = 0;
+    shm->file_size = 0;
     shm->status = 0;
 
     return shm;
@@ -81,13 +68,13 @@ shm_data_t* get_shm_segment(void) {
 
 // Return a segment to the pool
 void return_segment_to_pool(shm_data_t *shm) {
-    shm->size = 0;
+    shm->file_size = 0;
     shm->status = 0;
     shm->bytes_written = 0;  
     pthread_mutex_lock(&shm_queue_mutex);
     steque_enqueue(&shm_queue, shm);
-    pthread_cond_broadcast(&shm_queue_cond);
     pthread_mutex_unlock(&shm_queue_mutex);
+    pthread_cond_broadcast(&shm_queue_cond);
 }
 
 // Cleanup all shared memory segments
@@ -110,5 +97,5 @@ void cleanup_shm_pool(void) {
     }
     pthread_mutex_unlock(&shm_queue_mutex);
     steque_destroy(&shm_queue);
-    printf("[Proxy] Cleaned up shared memory pool\n");
+    // printf("[Proxy] Cleaned up shared memory pool\n");
 }

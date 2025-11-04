@@ -19,7 +19,7 @@ typedef struct {
     sem_t wsem;  // Signals when cache wrote a chunk
     int segsize; // segment size specified by user
     int status;  
-    size_t size;  // Total file size     
+    size_t file_size;  // Total file size     
     size_t bytes_written;  
     char data[];  // being tansferred  
 } shm_data_t;

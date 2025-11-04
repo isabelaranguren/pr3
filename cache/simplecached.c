@@ -28,7 +28,8 @@ unsigned long int cache_delay;
 
 static void _sig_handler(int signo){
 	if (signo == SIGTERM || signo == SIGINT){
-		// This is where your IPC clean up should occur
+		mq_unlink(CACHE_COMMAND_QUEUE);		
+		simplecache_destroy();
 		exit(signo);
 	}
 }
@@ -59,26 +60,36 @@ void Usage() {
 }
 
 void *cacheWorker(void *arg) {
-    mqd_t mq = *((mqd_t *)arg);
-    cache_req_t request;
     pthread_t tid = pthread_self();
-
+    cache_req_t request;
+    mqd_t mqd = *(mqd_t *)arg; 
+    
     while (1) {
-        if (mq_receive(mq, (char*)&request, sizeof(request), NULL) == -1) {
+        // Receive request from message queue
+        int n = mq_receive(mqd, (char*)&request, sizeof(request), NULL);
+        if (n <= 0) {
             perror("[Cache] mq_receive");
             continue;
         }
-
-        printf("[Cache TID:%lu] Received request for file: %s, shm segment: %s\n",
+        
+        printf("[Cache TID:%lu] Request: %s, segment: %s\n",
                (unsigned long)tid, request.path, request.shm_name);
-
+        
+        // Open shared memory segment
         int shmfd = shm_open(request.shm_name, O_RDWR, 0);
         if (shmfd < 0) {
             perror("[Cache] shm_open");
             continue;
         }
-
+        
         size_t shm_total_size = sizeof(shm_data_t) + request.segsize;
+        
+        if (ftruncate(shmfd, shm_total_size) == -1) {
+            perror("[Cache] ftruncate");
+            close(shmfd);
+            continue;
+        }
+        
         shm_data_t *shm = mmap(NULL, shm_total_size, PROT_READ | PROT_WRITE,
                                MAP_SHARED, shmfd, 0);
         if (shm == MAP_FAILED) {
@@ -86,76 +97,82 @@ void *cacheWorker(void *arg) {
             close(shmfd);
             continue;
         }
-
-        // Open file from cache
+        
+        // Wait for proxy to initialize semaphores
+        sem_wait(&shm->rsem);
+        
+        // Try to get file from cache
         int fd = simplecache_get(request.path);
+        
         if (fd < 0) {
-            printf("[Cache] File not found: %s\n", request.path);
+            // File not found
+            printf("[Cache TID:%lu] File not found: %s\n", (unsigned long)tid, request.path);
             shm->status = 404;
-            shm->size = 0;
-            sem_post(&shm->wsem);  // Signal status ready
-            sem_wait(&shm->rsem);  // Wait for proxy acknowledgment
+            shm->file_size = 0;
+            sem_post(&shm->wsem);
             munmap(shm, shm_total_size);
             close(shmfd);
             continue;
         }
-
+        
         // Get file size
         struct stat st;
         if (fstat(fd, &st) == -1) {
             perror("[Cache] fstat");
-            shm->status = 500;
-            sem_post(&shm->wsem);
-            sem_wait(&shm->rsem);
+            close(fd);
             munmap(shm, shm_total_size);
             close(shmfd);
-            close(fd);
             continue;
         }
-        
         size_t file_size = st.st_size;
-        printf("[Cache TID:%lu] Serving file: %s (%zu bytes)\n", 
-               (unsigned long)tid, request.path, file_size);
         
-        // Set status and file size
+        printf("[Cache TID:%lu] Serving: %s (%zu bytes) in segment %s\n",
+               (unsigned long)tid, request.path, file_size, request.shm_name);
+        
+        // Send status and file size to proxy
         shm->status = 200;
-        shm->size = file_size;
-        sem_post(&shm->wsem);  // Signal header ready
-        sem_wait(&shm->rsem);  // Wait for proxy to read header
-
-        // Now transfer file in chunks
+        shm->file_size = file_size;
+        sem_post(&shm->wsem);  // Signal metadata ready
+        
+        // Transfer file in chunks
+        char buffer[request.segsize];
+        size_t bytes_read = 0;
         size_t offset = 0;
-        while (offset < file_size) {
-            size_t bytes_left = file_size - offset;
-            size_t chunk_size = (bytes_left < request.segsize) ? bytes_left : request.segsize;
-
-            ssize_t n = pread(fd, shm->data, chunk_size, offset);
-            if (n <= 0) {
-                perror("[Cache] pread");
+        
+        while (bytes_read < file_size) {
+            sem_wait(&shm->rsem);  // Wait for proxy to be ready
+            
+            size_t bytes_to_read = (file_size - bytes_read < request.segsize) 
+                                   ? (file_size - bytes_read) 
+                                   : request.segsize;
+            
+            ssize_t nbytes = pread(fd, buffer, bytes_to_read, offset);
+            if (nbytes <= 0) {
+                perror("[Cache] pread error");
                 break;
             }
-
-            shm->bytes_written = n;
-            offset += n;
-
-            printf("[Cache TID:%lu] Wrote chunk: %zd bytes (offset: %zu/%zu)\n",
-                   (unsigned long)tid, n, offset, file_size);
-
+            
+            // Copy to shared memory
+            shm->bytes_written = nbytes;
+            memcpy(shm->data, buffer, nbytes);
+            
+            bytes_read += nbytes;
+            offset += nbytes;
+            
+            printf("[Cache TID:%lu] Chunk: %zd bytes (total: %zu/%zu)\n",
+                   (unsigned long)tid, nbytes, bytes_read, file_size);
+            
             sem_post(&shm->wsem);  // Signal chunk ready
-            sem_wait(&shm->rsem);  // Wait for proxy to consume chunk
         }
-
-        // Signal completion
-        shm->bytes_written = 0;  // EOF marker
-        sem_post(&shm->wsem);
-        sem_wait(&shm->rsem);
-
-        printf("[Cache TID:%lu] Finished file: %s\n", (unsigned long)tid, request.path);
-
-        munmap(shm, shm_total_size);
+        
+        printf("[Cache TID:%lu] Finished: %zu bytes\n", (unsigned long)tid, bytes_read);
+        
         close(fd);
+        munmap(shm, shm_total_size);
         close(shmfd);
     }
+    
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -227,11 +244,9 @@ int main(int argc, char **argv) {
 
     printf("[Main] Message queue created\n");
 
-    pthread_t workers[nthreads];
+   pthread_t workers[nthreads];
     for (int i = 0; i < nthreads; i++) {
-        mqd_t *mq_copy = malloc(sizeof(mqd_t));
-        *mq_copy = mqd;
-        if (pthread_create(&workers[i], NULL, cacheWorker, mq_copy) != 0) {
+        if (pthread_create(&workers[i], NULL, cacheWorker, (void *)&mqd) != 0) {
             perror("pthread_create");
             exit(CACHE_FAILURE);
         }
